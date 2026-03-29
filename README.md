@@ -151,14 +151,3 @@ This project exercises a good cross-section of C fundamentals:
 - **ANSI escape codes** for terminal colors and screen control
 - **`rand()` and `srand()`** for mine placement randomization
 
----
-
-## Possible Extensions
-
-Some ideas if you want to keep building on this:
-
-- **Timer** — track how long the game takes using `time()`
-- **High scores** — save best times to a file with `fopen`/`fprintf`
-- **Custom grid size** — let the player enter dimensions at startup
-- **Chord reveal** — clicking a numbered cell with the right number of adjacent flags reveals the remaining neighbors (standard Minesweeper mechanic)
-- **ncurses version** — replace raw `printf` with `ncurses` for real-time keyboard input (no Enter key needed)

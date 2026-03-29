@@ -38,6 +38,30 @@ minesweeper.exe
 
 ---
 
+## Timer & High Scores
+
+### Timer
+
+The timer starts on your **first move** (not when the game launches), so browsing the menu doesn't count against your time. While playing, the elapsed time is shown live in the board header:
+
+```
+  MINESWEEPER   Mines: 10   Flags: 2   Time: 0:42
+```
+
+On a win, your final time is displayed on the end screen.
+
+### High Scores
+
+The top 5 fastest winning times are tracked **per difficulty level** and saved to `highscores.dat` in the game directory. Scores persist between sessions.
+
+- The leaderboard is shown on the **main menu** every time you launch.
+- If your winning time enters the top 5, the game announces `** NEW HIGH SCORE! **` and shows the updated leaderboard.
+- Times are sorted ascending (fastest first) and displayed in `M:SS` format.
+
+The `highscores.dat` file is plain text and can be deleted to reset all scores.
+
+---
+
 ## How This Project Was Built
 
 This game was developed iteratively, starting from a working prototype and refining it through real playtesting. Here's the full timeline of decisions and fixes.
@@ -150,4 +174,6 @@ This project exercises a good cross-section of C fundamentals:
 - **Preprocessor directives** (`#ifdef`) for cross-platform support
 - **ANSI escape codes** for terminal colors and screen control
 - **`rand()` and `srand()`** for mine placement randomization
+- **`time.h`** for the live game timer and high score timestamps
+- **File I/O** (`fopen`/`fprintf`/`fscanf`) for persistent high score storage
 

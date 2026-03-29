@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include <ctype.h>
+#include <conio.h>
 
 /* ─── Configuration ─── */
 #define MAX_ROWS 20
@@ -24,8 +25,10 @@ typedef struct {
     int flags;
     int revealed;
     int total_safe;
-    int game_over;   /* 0 = playing, 1 = won, -1 = lost */
+    int game_over;      /* 0 = playing, 1 = won, -1 = lost */
     int first_move;
+    time_t start_time;
+    int timer_started;
 } Game;
 
 /* ─── Prototypes ─── */
@@ -34,8 +37,7 @@ void place_mines(Game *g, int safe_r, int safe_c);
 void calc_adjacent(Game *g);
 void reveal(Game *g, int r, int c);
 void toggle_flag(Game *g, int r, int c);
-void print_board(const Game *g, int show_all);
-int  parse_input(const char *buf, int *action, int *row, int *col, int max_row, int max_col);
+void print_board(const Game *g, int show_all, int cur_r, int cur_c);
 void clear_screen(void);
 
 /* ─── Helpers ─── */
@@ -145,13 +147,20 @@ static const char *num_colors[] = {
     "\033[37m",   /* 7 – white */
     "\033[90m",   /* 8 – gray */
 };
-#define RESET "\033[0m"
-#define BOLD  "\033[1m"
+#define RESET   "\033[0m"
+#define BOLD    "\033[1m"
+#define CURSOR  "\033[7m"   /* reverse video for cursor highlight */
 
-void print_board(const Game *g, int show_all) {
+void print_board(const Game *g, int show_all, int cur_r, int cur_c) {
     /* Header */
-    printf("\n  %s MINESWEEPER %s   Mines: %d   Flags: %d\n\n",
-           BOLD, RESET, g->mines, g->flags);
+    if (g->timer_started) {
+        long elapsed = (long)(time(NULL) - g->start_time);
+        printf("\n  %s MINESWEEPER %s   Mines: %d   Flags: %d   Time: %ld:%02ld\n\n",
+               BOLD, RESET, g->mines, g->flags, elapsed / 60, elapsed % 60);
+    } else {
+        printf("\n  %s MINESWEEPER %s   Mines: %d   Flags: %d\n\n",
+               BOLD, RESET, g->mines, g->flags);
+    }
 
     /* Column labels */
     printf("      ");
@@ -191,7 +200,11 @@ void print_board(const Game *g, int show_all) {
                     color = num_colors[cell->adjacent];
                 }
             }
-            printf(" %s%c%s", color, ch, RESET);
+
+            if (!show_all && r == cur_r && c == cur_c)
+                printf(" %s%s%c%s", CURSOR, color, ch, RESET);
+            else
+                printf(" %s%c%s", color, ch, RESET);
         }
         printf(" |\n");
     }
@@ -202,54 +215,82 @@ void print_board(const Game *g, int show_all) {
     printf("-+\n");
 }
 
-/* ─── Input Parsing ─── */
-/* Accepts:  "A3" or "3A" to reveal,  "xA3" or "x3A" to flag/unflag
-   Returns 1 on success, 0 on bad input.
-   *action: 0 = reveal, 1 = flag */
-int parse_input(const char *buf, int *action, int *row, int *col, int max_row, int max_col) {
-    /* Skip whitespace */
-    while (*buf == ' ' || *buf == '\t') buf++;
+/* ─── High Score System ─── */
+#define NUM_DIFFICULTIES 3
+#define MAX_SCORES       5
+#define SCORES_FILE      "highscores.dat"
 
-    *action = 0;
-    if (toupper((unsigned char)*buf) == 'X') {
-        *action = 1;
-        buf++;
-        while (*buf == ' ') buf++;
-    }
+typedef struct {
+    long times[NUM_DIFFICULTIES][MAX_SCORES]; /* seconds; 0 = empty slot */
+    int  counts[NUM_DIFFICULTIES];
+} ScoreBoard;
 
-    int got_row = 0, got_col = 0;
-    int r = 0, c = 0;
-
-    /* Try letter then number, or number then letter */
-    const char *p = buf;
-
-    if (isalpha((unsigned char)*p)) {
-        c = toupper((unsigned char)*p) - 'A';
-        got_col = 1;
-        p++;
-        while (*p == ' ') p++;
-        if (isdigit((unsigned char)*p)) {
-            r = (int)strtol(p, NULL, 10) - 1;
-            got_row = 1;
-        }
-    } else if (isdigit((unsigned char)*p)) {
-        char *end;
-        r = (int)strtol(p, &end, 10) - 1;
-        got_row = 1;
-        p = end;
-        while (*p == ' ') p++;
-        if (isalpha((unsigned char)*p)) {
-            c = toupper((unsigned char)*p) - 'A';
-            got_col = 1;
+void scores_load(ScoreBoard *sb) {
+    memset(sb, 0, sizeof(*sb));
+    FILE *f = fopen(SCORES_FILE, "r");
+    if (!f) return;
+    for (int d = 0; d < NUM_DIFFICULTIES; d++) {
+        if (fscanf(f, "%d", &sb->counts[d]) != 1) break;
+        if (sb->counts[d] > MAX_SCORES) sb->counts[d] = MAX_SCORES;
+        for (int i = 0; i < sb->counts[d]; i++) {
+            if (fscanf(f, "%ld", &sb->times[d][i]) != 1) {
+                sb->counts[d] = i;
+                break;
+            }
         }
     }
+    fclose(f);
+}
 
-    if (!got_row || !got_col) return 0;
-    if (r < 0 || r >= max_row || c < 0 || c >= max_col) return 0;
+void scores_save(const ScoreBoard *sb) {
+    FILE *f = fopen(SCORES_FILE, "w");
+    if (!f) return;
+    for (int d = 0; d < NUM_DIFFICULTIES; d++) {
+        fprintf(f, "%d\n", sb->counts[d]);
+        for (int i = 0; i < sb->counts[d]; i++)
+            fprintf(f, "%ld\n", sb->times[d][i]);
+    }
+    fclose(f);
+}
 
-    *row = r;
-    *col = c;
+/* Returns 1 if the time qualifies as a new top-5, 0 otherwise */
+int scores_add(ScoreBoard *sb, int d, long seconds) {
+    int n = sb->counts[d];
+    if (n >= MAX_SCORES && seconds >= sb->times[d][n - 1]) return 0;
+    /* Find insertion position */
+    int pos = (n < MAX_SCORES) ? n : MAX_SCORES - 1;
+    for (int i = 0; i < n && i < MAX_SCORES; i++) {
+        if (seconds < sb->times[d][i]) { pos = i; break; }
+    }
+    /* Shift entries down */
+    int limit = (n < MAX_SCORES) ? n : MAX_SCORES - 1;
+    for (int i = limit; i > pos; i--)
+        sb->times[d][i] = sb->times[d][i - 1];
+    sb->times[d][pos] = seconds;
+    if (n < MAX_SCORES) sb->counts[d]++;
     return 1;
+}
+
+void scores_print(const ScoreBoard *sb, int d) {
+    static const char *names[] = { "Beginner", "Intermediate", "Expert" };
+    printf("  %s%-13s%s", BOLD, names[d], RESET);
+    if (sb->counts[d] == 0) {
+        printf("  --\n");
+        return;
+    }
+    for (int i = 0; i < sb->counts[d]; i++) {
+        long t = sb->times[d][i];
+        if (i == 0) printf("  ");
+        else        printf("               ");
+        printf("%d. %ld:%02ld\n", i + 1, t / 60, t % 60);
+    }
+}
+
+void scores_print_all(const ScoreBoard *sb) {
+    printf("\n  %s--- High Scores (Top 5 per difficulty) ---%s\n", BOLD, RESET);
+    for (int d = 0; d < NUM_DIFFICULTIES; d++)
+        scores_print(sb, d);
+    printf("\n");
 }
 
 /* ─── Difficulty Selection ─── */
@@ -265,12 +306,15 @@ static const Preset presets[] = {
 int main(void) {
     srand((unsigned)time(NULL));
     Game game;
+    ScoreBoard scoreboard;
+    scores_load(&scoreboard);
 
     clear_screen();
     printf("\n");
     printf("  +------------------------------+\n");
     printf("  |       M I N E S W E E P E R  |\n");
-    printf("  +------------------------------+\n\n");
+    printf("  +------------------------------+\n");
+    scores_print_all(&scoreboard);
     printf("  Select difficulty:\n");
     printf("    1) Beginner      ( 9x9,  10 mines)\n");
     printf("    2) Intermediate  (16x16, 40 mines)\n");
@@ -288,55 +332,73 @@ int main(void) {
     const Preset *p = &presets[choice - 1];
     game_init(&game, p->rows, p->cols, p->mines);
 
+    int cursor_r = 0, cursor_c = 0;
+
     /* Game loop */
     while (game.game_over == 0) {
         clear_screen();
-        print_board(&game, 0);
-        printf("\n  Enter move (e.g. B3 to reveal, xB3 to flag): ");
+        print_board(&game, 0, cursor_r, cursor_c);
+        printf("\n  Arrow keys: move  |  Z: reveal  |  X: flag  |  Q: quit\n");
         fflush(stdout);
 
-        if (!fgets(buf, sizeof(buf), stdin)) break;
+        int key = _getch();
 
-        /* Quit shortcut */
-        if (toupper((unsigned char)buf[0]) == 'Q') break;
-
-        int action, r, c;
-        if (!parse_input(buf, &action, &r, &c, game.rows, game.cols)) {
-            printf("  Invalid input. Press Enter...");
-            fgets(buf, sizeof(buf), stdin);
+        /* Arrow keys send two bytes: 0 or 224, then a direction code */
+        if (key == 0 || key == 224) {
+            int key2 = _getch();
+            switch (key2) {
+                case 72: cursor_r = (cursor_r - 1 + game.rows) % game.rows; break; /* Up    */
+                case 80: cursor_r = (cursor_r + 1) % game.rows;             break; /* Down  */
+                case 75: cursor_c = (cursor_c - 1 + game.cols) % game.cols; break; /* Left  */
+                case 77: cursor_c = (cursor_c + 1) % game.cols;             break; /* Right */
+            }
             continue;
         }
 
-        if (action == 1) {
-            if (game.grid[r][c].state == REVEALED) {
-                printf("  Cell is already revealed. Press Enter...");
-                fgets(buf, sizeof(buf), stdin);
-                continue;
-            }
+        key = toupper(key);
+
+        if (key == 'Q') break;
+
+        int r = cursor_r, c = cursor_c;
+
+        if (key == 'X') {
+            /* Flag / unflag */
+            if (game.grid[r][c].state == REVEALED) continue;
             toggle_flag(&game, r, c);
-        } else {
-            if (game.grid[r][c].state == FLAGGED) {
-                printf("  Cell is flagged. Unflag first (x%c%d). Press Enter...",
-                       'A' + c, r + 1);
-                fgets(buf, sizeof(buf), stdin);
-                continue;
-            }
-            /* On first move, place mines away from chosen cell */
+        } else if (key == 'Z') {
+            /* Reveal */
+            if (game.grid[r][c].state == FLAGGED) continue;
             if (game.first_move) {
                 place_mines(&game, r, c);
                 calc_adjacent(&game);
                 game.first_move = 0;
+                game.start_time = time(NULL);
+                game.timer_started = 1;
             }
             reveal(&game, r, c);
         }
     }
 
+    /* Compute final time */
+    long final_time = 0;
+    int  is_high_score = 0;
+    if (game.game_over == 1 && game.timer_started) {
+        final_time = (long)(time(NULL) - game.start_time);
+        is_high_score = scores_add(&scoreboard, choice - 1, final_time);
+        if (is_high_score) scores_save(&scoreboard);
+    }
+
     /* End screen */
     clear_screen();
-    print_board(&game, 1);
+    print_board(&game, 1, -1, -1);
 
     if (game.game_over == 1) {
-        printf("\n  ** YOU WIN! Cleared all %d safe cells. **\n\n", game.total_safe);
+        long m = final_time / 60, s = final_time % 60;
+        printf("\n  %s** YOU WIN! **%s  Cleared all %d safe cells in %ld:%02ld\n",
+               BOLD, RESET, game.total_safe, m, s);
+        if (is_high_score)
+            printf("  %s** NEW HIGH SCORE! **%s\n", BOLD, RESET);
+        scores_print_all(&scoreboard);
     } else if (game.game_over == -1) {
         printf("\n  BOOM! You hit a mine. Better luck next time.\n\n");
     } else {
